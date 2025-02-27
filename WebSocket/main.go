@@ -1,8 +1,10 @@
 package main
 
 import (
+	"WebSocket_NSQ_Producer/storage"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/nsqio/go-nsq"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type EchoServer struct {
@@ -21,7 +24,13 @@ type RequestHandler struct {
 }
 
 type websocketRequest struct {
-	Topic string `json:"topic,omitempty"`
+	TrackingId string `json:"trackingId,omitempty"`
+}
+
+type Data struct {
+	TrackingId string `json:"trackingId"`
+	Age int `json:"age"`
+	Name string `json:"name"`
 }
 
 var (
@@ -59,19 +68,39 @@ func (h *RequestHandler) HandleRequest(conn *websocket.Conn) error {
 	if err := json.NewDecoder(r).Decode(&req); err != nil {
 		return fmt.Errorf("failed to decode JSON: %w", err)
 	}
+	data:=storage.FetchInProgressData(req.TrackingId)
+	if data!=nil{
+		var pendigData Data
+		pendingDataBytes,err:=json.Marshal(data)
+		if err!=nil{
+			return err
+		}
+		if err:=json.Unmarshal(pendingDataBytes,&pendigData);err!=nil{
+			return err
+		}
+		pendingWebSocketDataBytes,err := json.Marshal(pendigData)
+		if err!=nil{
+			return err
+		}
+		err = conn.Write(context.Background(),typ,pendingWebSocketDataBytes)
+		if err!=nil{
+			return err
+		}
+	}
 
+	insertedId := storage.SaveRequest(req.TrackingId, nil)
 	mu.Lock()
-	clients[conn] = req.Topic
+	clients[conn] = req.TrackingId
 	mu.Unlock()
-	log.Println("Client subscribed to topic:", req.Topic)
+	log.Println("Client subscribed to topic:", req.TrackingId)
 
-	startNSQConsumer(req.Topic, conn, typ)
+	startNSQConsumer(conn, typ, insertedId,req.TrackingId)
 	return nil
 }
-func startNSQConsumer(topic string, conn *websocket.Conn, typ websocket.MessageType) {
+func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, insertedId any ,trackingId string) {
 	config := nsq.NewConfig()
 	channel := fmt.Sprintf("channel-%d", time.Now().UnixNano())
-	consumer, err := nsq.NewConsumer(topic, channel, config)
+	consumer, err := nsq.NewConsumer("Health_claims", channel, config)
 	if err != nil {
 		log.Fatal("Failed to create NSQ consumer:", err)
 	}
@@ -80,7 +109,19 @@ func startNSQConsumer(topic string, conn *websocket.Conn, typ websocket.MessageT
 	consumer.AddHandler(nsq.HandlerFunc(func(message *nsq.Message) error {
 		mu.Lock()
 		defer mu.Unlock()
-
+		id,ok:=insertedId.(primitive.ObjectID)
+		if !ok{
+			return errors.New("Invalid type of _id")
+		}
+		storage.UpdateRequest(id)
+		var data Data
+		if err:=json.Unmarshal(message.Body,&data);err!=nil{
+			return err
+		}
+		if data.TrackingId== trackingId {
+			storage.UpdateData(id,data)
+		}
+	
 		// Send message to WebSocket client
 		if err := conn.Write(context.Background(), typ, message.Body); err != nil {
 			log.Println("Error sending message to WebSocket:", err)
@@ -98,6 +139,7 @@ func startNSQConsumer(topic string, conn *websocket.Conn, typ websocket.MessageT
 
 // Start WebSocket server
 func main() {
+	storage.ConnectDB()
 	svr := &EchoServer{
 		Logf: log.Printf,
 		// Limiter: rate.NewLimiter(rate.Every(100*time.Millisecond), 10),

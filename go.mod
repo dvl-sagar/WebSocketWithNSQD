@@ -1,6 +1,6 @@
 module WebSocket_NSQ_Producer
 
-go 1.23.4
+go 1.23.2
 
 require (
 	github.com/coder/websocket v1.8.12

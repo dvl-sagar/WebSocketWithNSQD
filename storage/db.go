@@ -28,6 +28,8 @@ type PendingRequest struct {
 	Data       any    `json:"status" bson:"status"`
 }
 
+
+
 func ConnectDB() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -48,20 +50,21 @@ func ConnectDB() {
 	log.Println("Connected to MongoDB")
 }
 
-func SaveRequest(trackingId string, data any) {
+func SaveRequest(trackingId string, data any) any {
 	req := DbRequest{
 		TrackingId: trackingId,
 		Data:       data,
 		Status:     "in-progress",
 		CreatedAt:  time.Now(),
 	}
-	_, err := collection.InsertOne(context.TODO(), req)
+	result, err := collection.InsertOne(context.TODO(), req)
 	if err != nil {
 		log.Println("Error saving request:", err)
 	}
+	return result.InsertedID
 }
 
-func UpdateRequest(id, result string) {
+func UpdateRequest(id primitive.ObjectID) {
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{"status": "done"}}
 
@@ -69,6 +72,25 @@ func UpdateRequest(id, result string) {
 	if err != nil {
 		log.Println("Error saving result:", err)
 	}
+}
+func UpdateData(id primitive.ObjectID,data any) {
+	filter := bson.M{"_id": id}
+	update := bson.M{"$set": bson.M{"data": data}}
+
+	_, err := collection.UpdateOne(context.TODO(), filter, update)
+	if err != nil {
+		log.Println("Error saving result:", err)
+	}
+}
+
+func FetchInProgressData(trackingId string)any{
+	filter := bson.M{"trackingId": trackingId,"status":"in-progress"}
+	var result map[string]interface{}
+	err:=collection.FindOne(context.Background(),filter).Decode(&result)
+	if err != nil {
+		log.Println("Error fetching result:", err)
+	}
+	return result["data"]
 }
 
 func GetResult(id string) (any, bool) {
@@ -97,7 +119,7 @@ func GetPendingRequests() []string {
 			log.Println("Error decoding pending request:", err)
 			continue
 		}
-		pendingIDs = append(pendingIDs, req.ID)
+		pendingIDs = append(pendingIDs, req.TrackingId)
 	}
 	return pendingIDs
 }
