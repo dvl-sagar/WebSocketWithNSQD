@@ -3,17 +3,18 @@ package main
 import (
 	"WebSocket_NSQ_Producer/storage"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/nsqio/go-nsq"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type EchoServer struct {
@@ -24,13 +25,12 @@ type RequestHandler struct {
 }
 
 type websocketRequest struct {
-	TrackingId string `json:"trackingId,omitempty"`
+	TrackingId []string `json:"trackingId,omitempty"`
 }
 
 type Data struct {
-	TrackingId string `json:"trackingId"`
-	Age int `json:"age"`
-	Name string `json:"name"`
+	TrackingId string `json:"trackingId,omitempty"`
+	Data       any    `json:"data,omitempty"`
 }
 
 var (
@@ -39,6 +39,13 @@ var (
 )
 
 func (s *EchoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	userId, err := getRequestToken(r)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		s.Logf("WebSocket accept error: %v", err)
@@ -46,18 +53,18 @@ func (s *EchoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handler := RequestHandler{}
-	for {
-		if err := handler.HandleRequest(c); err != nil {
-			if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
-				return
-			}
-			s.Logf("Request processing error: %v", err)
+
+	if err := handler.HandleRequest(c, userId); err != nil {
+		if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
 			return
 		}
+		s.Logf("Request processing error: %v", err)
+		return
 	}
+
 }
 
-func (h *RequestHandler) HandleRequest(conn *websocket.Conn) error {
+func (h *RequestHandler) HandleRequest(conn *websocket.Conn, userId string) error {
 	ctx := context.Background()
 	typ, r, err := conn.Reader(ctx)
 	if err != nil {
@@ -66,41 +73,43 @@ func (h *RequestHandler) HandleRequest(conn *websocket.Conn) error {
 
 	var req websocketRequest
 	if err := json.NewDecoder(r).Decode(&req); err != nil {
-		return fmt.Errorf("failed to decode JSON: %w", err)
+		log.Printf("invalid request sent")
+		return nil
 	}
-	data:=storage.FetchInProgressData(req.TrackingId)
-	if data!=nil{
-		var pendigData Data
-		pendingDataBytes,err:=json.Marshal(data)
-		if err!=nil{
-			return err
-		}
-		if err:=json.Unmarshal(pendingDataBytes,&pendigData);err!=nil{
-			return err
-		}
-		pendingWebSocketDataBytes,err := json.Marshal(pendigData)
-		if err!=nil{
-			return err
-		}
-		err = conn.Write(context.Background(),typ,pendingWebSocketDataBytes)
-		if err!=nil{
-			return err
+
+	data := storage.FetchInProgressData(req.TrackingId, userId)
+
+	if len(data) > 0 {
+		for _, innerData := range data {
+			pendigData := Data{
+				TrackingId: innerData.TrackingId,
+				Data:       innerData.Data,
+			}
+			pendingDataBytes, err := json.Marshal(pendigData)
+			if err != nil {
+				return err
+			}
+			err = conn.Write(context.Background(), typ, pendingDataBytes)
+			if err != nil {
+				return err
+			}
+			storage.CompleteRequest(innerData.TrackingId, userId)
 		}
 	}
 
-	insertedId := storage.SaveRequest(req.TrackingId, nil)
+	storage.SaveRequest(req.TrackingId, nil, userId)
 	mu.Lock()
-	clients[conn] = req.TrackingId
+	clients[conn] = "Topic_1"
 	mu.Unlock()
 	log.Println("Client subscribed to topic:", req.TrackingId)
 
-	startNSQConsumer(conn, typ, insertedId,req.TrackingId)
+	startNSQConsumer(conn, typ, req.TrackingId, userId)
 	return nil
 }
-func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, insertedId any ,trackingId string) {
+func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingId []string, userId string) {
 	config := nsq.NewConfig()
-	channel := fmt.Sprintf("channel-%d", time.Now().UnixNano())
-	consumer, err := nsq.NewConsumer("Health_claims", channel, config)
+	UserChannel := fmt.Sprintf("channel-%v", userId)
+	consumer, err := nsq.NewConsumer("Topic_1", UserChannel, config)
 	if err != nil {
 		log.Fatal("Failed to create NSQ consumer:", err)
 	}
@@ -109,23 +118,22 @@ func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, insertedI
 	consumer.AddHandler(nsq.HandlerFunc(func(message *nsq.Message) error {
 		mu.Lock()
 		defer mu.Unlock()
-		id,ok:=insertedId.(primitive.ObjectID)
-		if !ok{
-			return errors.New("Invalid type of _id")
-		}
-		storage.UpdateRequest(id)
+
 		var data Data
-		if err:=json.Unmarshal(message.Body,&data);err!=nil{
+		if err := json.Unmarshal(message.Body, &data); err != nil {
 			return err
 		}
-		if data.TrackingId== trackingId {
-			storage.UpdateData(id,data)
-		}
-	
-		// Send message to WebSocket client
-		if err := conn.Write(context.Background(), typ, message.Body); err != nil {
-			log.Println("Error sending message to WebSocket:", err)
-			return err
+
+		if slices.Contains(trackingId, data.TrackingId) {
+			storage.UpdateRequest(data.TrackingId, userId, data.Data)
+
+			// Send message to WebSocket client
+			if err := conn.Write(context.Background(), typ, message.Body); err != nil {
+				log.Println("Error sending message to WebSocket:", err)
+				return err
+			}
+
+			storage.CompleteRequest(data.TrackingId, userId)
 		}
 		return nil
 	}))
@@ -135,6 +143,67 @@ func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, insertedI
 	if err != nil {
 		log.Fatal("Failed to connect NSQ consumer:", err)
 	}
+}
+
+func getRequestToken(r *http.Request) (string, error) {
+	if len(r.Header.Values("Authorization")) != 1 {
+		return "", errors.New("ErrInvalidAuthorizationToken")
+	}
+	parts := strings.Split(r.Header.Values("Authorization")[0], " ")
+	if len(parts) != 2 {
+		return "", errors.New("ErrInvalidAuthorizationToken")
+	}
+	return getRoleFromToken(parts[1])
+}
+
+func getRoleFromToken(token string) (string, error) {
+	tokenComponents := strings.Split(token, ".")
+	if len(tokenComponents) != 3 {
+		return "", errors.New("ErrInvalidTokenProvided")
+	}
+
+	payload := tokenComponents[1]
+
+	payloadJsonStr, err := DecodeBase64(payload)
+
+	if err != nil {
+		return "", err
+	}
+
+	var jsonMap map[string]interface{}
+	_ = json.Unmarshal([]byte(payloadJsonStr), &jsonMap)
+	requestMap := make(map[string]interface{})
+
+	additionalData := jsonMap["additionalData"]
+	d, err := json.Marshal(additionalData)
+	if err != nil {
+		return "", errors.New("ErrInvalidRequest")
+	}
+	err = json.Unmarshal(d, &requestMap)
+	if err != nil {
+		return "", errors.New("ErrInvalidRequest")
+	}
+
+	role := requestMap["id"]
+	roleStr := fmt.Sprintf("%v", role)
+
+	return roleStr, nil
+}
+
+func DecodeBase64(payload string) (string, error) {
+	padding := ""
+	if i := len(payload) % 4; i != 0 {
+		padding = strings.Repeat("=", 4-i)
+	}
+
+	payload = payload + padding
+
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
 }
 
 // Start WebSocket server
@@ -148,90 +217,3 @@ func main() {
 	log.Println("WebSocket server started at ws://localhost:8080/ws")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
-
-// WebSocket connection handler
-// func handleConnections(w http.ResponseWriter, r *http.Request) {
-// 	conn, err := websocket.Accept(w, r, nil)
-// 	if err != nil {
-// 		log.Println("WebSocket connection error:", err)
-// 		return
-// 	}
-// 	// defer conn.Close(websocket.StatusNormalClosure, "Closing connection")
-
-// 	typ, wsReqeust, err := conn.Reader(context.Background())
-// 	if err != nil {
-// 		log.Println("Error reading topic:", err)
-// 		return
-// 	}
-// 	// Read topic from client
-// 	var req websocketRequest
-// 	err = json.NewDecoder(r.Body).Decode(&wsReqeust)
-// 	if err != nil {
-// 		log.Println("Error reading topic:", err)
-// 		return
-// 	}
-// 	_, topic, err := conn.Read(r.Context())
-// 	if err != nil {
-// 		log.Println("Error reading topic:", err)
-// 		return
-// 	}
-// 	// Store new WebSocket connection
-// 	mu.Lock()
-// 	clients[conn] = req.Topic
-// 	mu.Unlock()
-// 	log.Println("Client subscribed to topic:", string(topic))
-
-// 	// Start NSQ consumer for the topic
-// 	startNSQConsumer(req.Topic, conn, typ)
-// }
-
-// Start NSQ Consumer
-
-// func (h *RequestHandler) handleNewRequest(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, req md.Request) error {
-// 	ID := uuid.New().String()
-// 	st.SaveRequest(ID, req.Data)
-// 	resp := md.Response{ID: ID}
-
-// 	if err := sendResponse(ctx, conxn, typ, resp); err != nil {
-// 		return err
-// 	}
-
-// 	h.processAndStoreResult(ID, req.Data)
-// 	return h.sendStoredResult(ctx, conxn, typ, ID)
-// }
-
-// func (h *RequestHandler) handleExistingRequest(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, req md.Request) error {
-// 	result, exists := st.GetResult(req.ID)
-// 	resp := md.Response{ID: req.ID}
-
-// 	if exists {
-// 		resp.Result = result
-// 	} else {
-// 		resp.Error = "Request ID not found"
-// 	}
-
-// 	return sendResponse(ctx, conxn, typ, resp)
-// }
-
-// func (h *RequestHandler) processAndStoreResult(requestID string, requestData any) {
-// 	result := pc.Process(requestData)
-// 	st.SaveResult(requestID, result)
-// }
-
-// func (h *RequestHandler) sendStoredResult(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, ID string) error {
-// 	result, exists := st.GetResult(ID)
-// 	if !exists {
-// 		return nil
-// 	}
-
-// 	resp := md.Response{ID: ID, Result: result}
-// 	return sendResponse(ctx, conxn, typ, resp)
-// }
-
-// func sendResponse(ctx context.Context, conxn *websocket.Conn, typ websocket.MessageType, resp any) error {
-// 	respByte, err := json.Marshal(resp)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return conxn.Write(ctx, typ, respByte)
-// }
