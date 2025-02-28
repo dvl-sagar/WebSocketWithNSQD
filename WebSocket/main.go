@@ -191,16 +191,16 @@ func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingI
 	return consumer
 }
 
-func getRequestToken(r *http.Request) (string, error) {
-	if len(r.Header.Values("Authorization")) != 1 {
-		return "", errors.New("ErrInvalidAuthorizationToken")
-	}
-	parts := strings.Split(r.Header.Values("Authorization")[0], " ")
-	if len(parts) != 2 {
-		return "", errors.New("ErrInvalidAuthorizationToken")
-	}
-	return getRoleFromToken(parts[1])
-}
+// func getRequestToken(r *http.Request) (string, error) {
+// 	if len(r.Header.Values("Authorization")) != 1 {
+// 		return "", errors.New("ErrInvalidAuthorizationToken")
+// 	}
+// 	parts := strings.Split(r.Header.Values("Authorization")[0], " ")
+// 	if len(parts) != 2 {
+// 		return "", errors.New("ErrInvalidAuthorizationToken")
+// 	}
+// 	return getRoleFromToken(parts[1])
+// }
 
 func getRoleFromToken(token string) (string, error) {
 	tokenComponents := strings.Split(token, ".")
@@ -230,9 +230,9 @@ func getRoleFromToken(token string) (string, error) {
 		return "", errors.New("ErrInvalidRequest")
 	}
 
-	role := requestMap["id"]
-	roleStr := fmt.Sprintf("%v", role)
-
+	role := requestMap["role"]
+	userId := jsonMap["userid"]
+	roleStr := fmt.Sprintf("%v_%v", role, userId)
 	return roleStr, nil
 }
 

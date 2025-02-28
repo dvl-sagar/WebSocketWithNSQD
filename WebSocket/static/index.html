@@ -9,42 +9,127 @@
             font-family: Arial, sans-serif;
             background-color: #121212;
             color: white;
-            text-align: center;
-            padding: 20px;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
         }
         .container {
             max-width: 600px;
-            margin: auto;
-            background: #1e1e1e;
+            width: 100%;
+            background: linear-gradient(145deg, #2a2a2a, #1e1e1e);
             padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            border: 2px solid #444; /* Added border */
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); /* Enhanced shadow */
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
-        input, button, textarea {
+        .container:hover {
+            transform: translateY(-5px); /* Slight lift on hover */
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.7); /* Enhanced shadow on hover */
+        }
+        h2 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #ccc;
+        }
+        .input-group input {
             width: 100%;
             padding: 10px;
-            margin: 10px 0;
             border-radius: 5px;
-            border: none;
-        }
-        input {
+            border: 1px solid #444;
             background: #333;
             color: white;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
         }
-        button {
+        .input-group input:focus {
+            border-color: #007bff; /* Highlight input on focus */
+            outline: none;
+        }
+        .button-group {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        .button-group button {
+            flex: 1;
+            margin: 0 5px;
+            padding: 10px;
+            border-radius: 5px;
+            border: none;
             cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s ease, transform 0.2s ease;
+        }
+        .button-group button.connect {
+            background: #28a745;
+            color: white;
+        }
+        .button-group button.connect:hover {
+            background: #218838;
+            transform: scale(1.05); /* Slight scale on hover */
+        }
+        .button-group button.disconnect {
+            background: #dc3545;
+            color: white;
+        }
+        .button-group button.disconnect:hover {
+            background: #c82333;
+            transform: scale(1.05); /* Slight scale on hover */
+        }
+        .button-group button.send {
             background: #007bff;
             color: white;
-            font-size: 16px;
         }
-        button.disconnect {
-            background: #dc3545;
+        .button-group button.send:hover {
+            background: #0056b3;
+            transform: scale(1.05); /* Slight scale on hover */
+        }
+        .status {
+            text-align: center;
+            margin-bottom: 15px;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 5px;
+            background: #333;
+            transition: background 0.3s ease;
+        }
+        .status.connected {
+            color: #28a745;
+            background: rgba(40, 167, 69, 0.1); /* Subtle background for status */
+        }
+        .status.disconnected {
+            color: #dc3545;
+            background: rgba(220, 53, 69, 0.1); /* Subtle background for status */
         }
         textarea {
+            width: 100%;
             height: 200px;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #444;
             background: #222;
             color: #0f0;
-            overflow-y: scroll;
+            font-family: monospace;
+            font-size: 14px;
+            resize: none;
+            transition: border-color 0.3s ease;
+        }
+        textarea:focus {
+            border-color: #007bff; /* Highlight textarea on focus */
+            outline: none;
         }
     </style>
 </head>
@@ -52,11 +137,28 @@
 
     <div class="container">
         <h2>WebSocket Client</h2>
-        <input type="text" id="jwtToken" placeholder="Enter JWT Token">
-        <button onclick="connectWebSocket()">Connect</button>
-        <button class="disconnect" onclick="disconnectWebSocket()" disabled>Disconnect</button>
-        <input type="text" id="trackingId" placeholder="Enter Tracking IDs (comma-separated)">
-        <button onclick="sendTrackingIds()">Send Tracking IDs</button>
+        
+        <div class="input-group">
+            <label for="jwtToken">Token</label>
+            <input type="text" id="jwtToken" placeholder="Enter your token">
+        </div>
+
+        <div class="button-group">
+            <button class="connect" onclick="connectWebSocket()">Connect</button>
+            <button class="disconnect" onclick="disconnectWebSocket()" disabled>Disconnect</button>
+        </div>
+
+        <div class="input-group">
+            <label for="trackingId">Tracking IDs</label>
+            <input type="text" id="trackingId" placeholder="Enter tracking IDs (comma-separated)">
+        </div>
+
+        <div class="button-group">
+            <button class="send" onclick="sendTrackingIds()">Send Tracking IDs</button>
+        </div>
+
+        <div class="status disconnected" id="status">Disconnected</div>
+
         <h3>Messages:</h3>
         <textarea id="messages" readonly></textarea>
     </div>
@@ -76,6 +178,9 @@
             ws.onopen = function () {
                 console.log("Connected to WebSocket");
                 document.querySelector(".disconnect").disabled = false;
+                document.querySelector(".connect").disabled = true;
+                document.getElementById("status").textContent = "Connected";
+                document.getElementById("status").className = "status connected";
                 document.getElementById("messages").value += "Connected to WebSocket\n";
             };
             
@@ -86,6 +191,9 @@
             ws.onclose = function () {
                 console.log("Disconnected from WebSocket");
                 document.querySelector(".disconnect").disabled = true;
+                document.querySelector(".connect").disabled = false;
+                document.getElementById("status").textContent = "Disconnected";
+                document.getElementById("status").className = "status disconnected";
                 document.getElementById("messages").value += "Disconnected\n";
             };
             
@@ -99,6 +207,7 @@
             if (ws) {
                 ws.close();
                 document.querySelector(".disconnect").disabled = true;
+                document.querySelector(".connect").disabled = false;
             }
         }
 
