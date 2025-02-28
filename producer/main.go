@@ -20,7 +20,7 @@ func main() {
 		fmt.Print("please Enter the Message : ")
 		reader := bufio.NewReader(os.Stdin)
 		message, _ := reader.ReadString('\n')
-		err = producer.Publish("Health_claims", []byte(message))
+		err = producer.Publish("Topic_1", []byte(message))
 		if err != nil {
 			log.Fatal("Failed to publish message:", err)
 		}
