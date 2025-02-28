@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+        }
+        input, button, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border: none;
+        }
+        input {
+            background: #333;
+            color: white;
+        }
+        button {
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            font-size: 16px;
+        }
+        button.disconnect {
+            background: #dc3545;
+        }
+        textarea {
+            height: 200px;
+            background: #222;
+            color: #0f0;
+            overflow-y: scroll;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>WebSocket Client</h2>
+        <input type="text" id="jwtToken" placeholder="Enter JWT Token">
+        <button onclick="connectWebSocket()">Connect</button>
+        <button class="disconnect" onclick="disconnectWebSocket()" disabled>Disconnect</button>
+        <input type="text" id="trackingId" placeholder="Enter Tracking IDs (comma-separated)">
+        <button onclick="sendTrackingIds()">Send Tracking IDs</button>
+        <h3>Messages:</h3>
+        <textarea id="messages" readonly></textarea>
+    </div>
+
+    <script>
+        let ws;
+        
+        function connectWebSocket() {
+            const token = document.getElementById("jwtToken").value.trim();
+            if (!token) {
+                alert("Please enter a JWT Token");
+                return;
+            }
+            
+            ws = new WebSocket(`ws://localhost:8080/ws?token=${encodeURIComponent(token)}`);
+            
+            ws.onopen = function () {
+                console.log("Connected to WebSocket");
+                document.querySelector(".disconnect").disabled = false;
+                document.getElementById("messages").value += "Connected to WebSocket\n";
+            };
+            
+            ws.onmessage = function (event) {
+                document.getElementById("messages").value += "Message: " + event.data + "\n";
+            };
+            
+            ws.onclose = function () {
+                console.log("Disconnected from WebSocket");
+                document.querySelector(".disconnect").disabled = true;
+                document.getElementById("messages").value += "Disconnected\n";
+            };
+            
+            ws.onerror = function (error) {
+                console.error("WebSocket Error: ", error);
+                alert("WebSocket error occurred!");
+            };
+        }
+
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                document.querySelector(".disconnect").disabled = true;
+            }
+        }
+
+        function sendTrackingIds() {
+            const trackingIds = document.getElementById("trackingId").value.split(",").map(id => id.trim());
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = JSON.stringify({ trackingId: trackingIds });
+                ws.send(message);
+                document.getElementById("messages").value += "Sent: " + message + "\n";
+            } else {
+                alert("WebSocket is not connected!");
+            }
+        }
+    </script>
+
+</body>
+</html>

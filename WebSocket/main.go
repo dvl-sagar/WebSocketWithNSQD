@@ -33,14 +33,14 @@ type Data struct {
 	Data       any    `json:"data,omitempty"`
 }
 
-var (
-	clients = make(map[*websocket.Conn]string)
-	mu      sync.Mutex
-)
-
 func (s *EchoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	userId, err := getRequestToken(r)
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Missing token", http.StatusUnauthorized)
+		return
+	}
+	userId, err := getRoleFromToken(token)
 	if err != nil {
 		log.Println(err)
 		return
@@ -64,8 +64,16 @@ func (s *EchoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 }
 
+var (
+	clients   = make(map[*websocket.Conn]string)
+	consumers = make(map[string]*nsq.Consumer) // Track consumers per user
+	mu        sync.Mutex
+)
+
 func (h *RequestHandler) HandleRequest(conn *websocket.Conn, userId string) error {
 	ctx := context.Background()
+
+	// Read WebSocket request
 	typ, r, err := conn.Reader(ctx)
 	if err != nil {
 		return err
@@ -73,23 +81,23 @@ func (h *RequestHandler) HandleRequest(conn *websocket.Conn, userId string) erro
 
 	var req websocketRequest
 	if err := json.NewDecoder(r).Decode(&req); err != nil {
-		log.Printf("invalid request sent")
+		log.Printf("Invalid request sent")
 		return nil
 	}
 
+	// Fetch and send pending data
 	data := storage.FetchInProgressData(req.TrackingId, userId)
-
 	if len(data) > 0 {
 		for _, innerData := range data {
-			pendigData := Data{
+			pendingData := Data{
 				TrackingId: innerData.TrackingId,
 				Data:       innerData.Data,
 			}
-			pendingDataBytes, err := json.Marshal(pendigData)
+			pendingDataBytes, err := json.Marshal(pendingData)
 			if err != nil {
 				return err
 			}
-			err = conn.Write(context.Background(), typ, pendingDataBytes)
+			err = conn.Write(ctx, typ, pendingDataBytes)
 			if err != nil {
 				return err
 			}
@@ -97,18 +105,52 @@ func (h *RequestHandler) HandleRequest(conn *websocket.Conn, userId string) erro
 		}
 	}
 
+	// Save request for tracking
 	storage.SaveRequest(req.TrackingId, nil, userId)
-	mu.Lock()
-	clients[conn] = "Topic_1"
-	mu.Unlock()
-	log.Println("Client subscribed to topic:", req.TrackingId)
 
-	startNSQConsumer(conn, typ, req.TrackingId, userId)
-	return nil
+	mu.Lock()
+	clients[conn] = userId
+	mu.Unlock()
+
+	log.Println("Client subscribed:", userId, "Tracking IDs:", req.TrackingId)
+
+	// Start NSQ Consumer
+	consumer := startNSQConsumer(conn, typ, req.TrackingId, userId)
+
+	// Close NSQ Consumer on WebSocket disconnect
+	defer func() {
+		mu.Lock()
+		delete(clients, conn)
+		if consumer != nil {
+			consumer.Stop()
+			delete(consumers, userId)
+			log.Println("NSQ Consumer closed for user:", userId)
+		}
+		mu.Unlock()
+	}()
+
+	// Keep the connection alive
+	for {
+		_, _, err := conn.Reader(ctx)
+		if err != nil {
+			return err
+		}
+	}
 }
-func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingId []string, userId string) {
+
+func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingId []string, userId string) *nsq.Consumer {
+	mu.Lock()
+	defer mu.Unlock()
+
+	// If a consumer for this user already exists, return
+	if _, exists := consumers[userId]; exists {
+		log.Println("Consumer already exists for user:", userId)
+		return consumers[userId]
+	}
+
 	config := nsq.NewConfig()
 	UserChannel := fmt.Sprintf("channel-%v", userId)
+
 	consumer, err := nsq.NewConsumer("Topic_1", UserChannel, config)
 	if err != nil {
 		log.Fatal("Failed to create NSQ consumer:", err)
@@ -143,6 +185,10 @@ func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingI
 	if err != nil {
 		log.Fatal("Failed to connect NSQ consumer:", err)
 	}
+
+	consumers[userId] = consumer
+	log.Println("NSQ Consumer started for user:", userId)
+	return consumer
 }
 
 func getRequestToken(r *http.Request) (string, error) {
@@ -214,6 +260,10 @@ func main() {
 		// Limiter: rate.NewLimiter(rate.Every(100*time.Millisecond), 10),
 	}
 	http.Handle("/ws", svr)
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
+
+	log.Println("Server started on http://localhost:8080")
 	log.Println("WebSocket server started at ws://localhost:8080/ws")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
