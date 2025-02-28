@@ -221,3 +221,45 @@ func main() {
 	log.Println("WebSocket server started at ws://localhost:8080/ws")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
+
+
+
+// When you want to run on UI uncomment this code and use it
+
+// func getRequestToken(r *http.Request) (string, error) {
+// 	token := r.URL.Query().Get("token")
+// 	if token == "" {
+// 		return "", errors.New("missing token")
+// 	}
+// 	return processToken(token)
+// }
+// func processToken(token string) (string, error) {
+// 	tokenParts := strings.Split(token, ".")
+// 	if len(tokenParts) != 3 {
+// 		return "", errors.New("invalid token format")
+// 	}
+
+// 	payload := tokenParts[1]
+// 	payloadJsonStr, err := DecodeBase64(payload)
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to decode token payload: %w", err)
+// 	}
+
+// 	var claims map[string]any
+// 	if err := json.Unmarshal([]byte(payloadJsonStr), &claims); err != nil {
+// 		return "", fmt.Errorf("invalid token payload: %w", err)
+// 	}
+
+// 	// Extract `id` from `additionalData`
+// 	additionalData, ok := claims["additionalData"].(map[string]any)
+// 	if !ok {
+// 		return "", errors.New("invalid additionalData format")
+// 	}
+
+// 	id, ok := additionalData["id"].(string)
+// 	if !ok {
+// 		return "", errors.New("id missing or invalid in token")
+// 	}
+
+// 	return id, nil
+// }

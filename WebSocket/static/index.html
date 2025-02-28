@@ -1,175 +1,82 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>WebSocket NSQ Client</title>
+    <title>WebSocket Client</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background-color: #f5f5f5;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
+            margin: 40px;
         }
-        .container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            width: 400px;
-        }
-        h2 {
-            margin-top: 0;
-            font-size: 24px;
-            text-align: center;
-            color: #333;
-        }
-        label {
-            display: block;
-            margin: 10px 0 5px;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        input {
-            width: 100%;
+        input, button {
+            margin: 10px 0;
             padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        button {
             width: 100%;
-            padding: 10px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            margin-top: 15px;
-        }
-        button:hover {
-            background-color: #0056b3;
         }
         pre {
-            background-color: #f8f9fa;
-            padding: 10px;
-            height: 150px;
-            overflow-y: auto;
+            background-color: #f5f5f5;
             border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 12px;
-            color: #555;
-        }
-        .status {
-            margin: 10px 0;
-            text-align: center;
-            font-weight: bold;
-            color: #28a745;
-        }
-        .error {
-            color: #dc3545;
+            padding: 10px;
+            height: 200px;
+            overflow-y: scroll;
         }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>WebSocket NSQ Client</h2>
+<h2>WebSocket Client</h2>
 
-    <label for="trackingId">Tracking IDs (comma separated)</label>
-    <input type="text" id="trackingId" placeholder="e.g., id1,id2">
+<label for="token">Token:</label>
+<input type="text" id="token" placeholder="Enter your token">
 
-    <label for="authToken">Auth Token</label>
-    <input type="text" id="authToken" placeholder="Bearer xxxxxx.yyyyyy.zzzzzz">
+<label for="trackingId">Tracking IDs (comma-separated):</label>
+<input type="text" id="trackingId" placeholder="Enter Tracking IDs">
 
-    <button onclick="connectWebSocket()">Connect to WebSocket</button>
+<button onclick="connectWebSocket()">Connect WebSocket</button>
 
-    <div class="status" id="status">Not connected</div>
-
-    <h3>Messages from Server:</h3>
-    <pre id="output">Waiting for messages...</pre>
-</div>
+<h3>Messages:</h3>
+<pre id="messages"></pre>
 
 <script>
-    let socket;
+    let socket = null;
 
     function connectWebSocket() {
-        const trackingIdInput = document.getElementById('trackingId').value.trim();
-        const trackingIds = trackingIdInput.split(',').map(t => t.trim()).filter(t => t !== "");
-        const authToken = document.getElementById('authToken').value.trim();
+        const token = document.getElementById("token").value.trim();
+        const trackingId = document.getElementById("trackingId").value.split(",").map(id => id.trim());
 
-        if (!authToken.startsWith("Bearer ")) {
-            showError("Auth token must start with 'Bearer '");
+        if (!token) {
+            alert("Token is required!");
             return;
         }
 
-        if (trackingIds.length === 0) {
-            showError("Please enter at least one Tracking ID.");
+        if (trackingId.length === 0 || (trackingId.length === 1 && trackingId[0] === "")) {
+            alert("Please enter at least one tracking ID.");
             return;
         }
 
-        // Reset UI
-        clearMessages();
-        setStatus("Connecting...", "#ffc107");
-
-        socket = new WebSocket('ws://localhost:8080/ws');
+        const wsUrl = `ws://localhost:8080/ws?token=${encodeURIComponent(token)}`;
+        socket = new WebSocket(wsUrl);
 
         socket.onopen = () => {
-            setStatus("Connected!", "#28a745");
-            const payload = JSON.stringify({ trackingId: trackingIds });
-            socket.send(payload);
+            console.log("WebSocket connection established");
+            const request = { trackingId };
+            socket.send(JSON.stringify(request));
         };
 
         socket.onmessage = (event) => {
-            appendMessage(event.data);
+            const messageBox = document.getElementById("messages");
+            messageBox.innerText += event.data + "\n";
+            messageBox.scrollTop = messageBox.scrollHeight;
         };
 
         socket.onerror = (error) => {
             console.error("WebSocket error:", error);
-            showError("WebSocket error occurred!");
+            alert("WebSocket error occurred. Check console for details.");
         };
 
         socket.onclose = () => {
-            setStatus("Disconnected", "#dc3545");
+            console.log("WebSocket connection closed");
+            alert("Connection closed by server.");
         };
-
-        // Hijack the send to attach Authorization (for dev-mode only - this won't work in real browsers)
-        const originalSend = socket.send;
-        socket.send = (data) => {
-            const request = {
-                headers: { Authorization: authToken },
-                body: data
-            };
-            fetch('/ws', { method: 'POST', headers: request.headers, body: request.body })
-                .catch(err => console.error("Auth header hack failed:", err));
-            originalSend.call(socket, data);
-        };
-    }
-
-    function appendMessage(msg) {
-        const output = document.getElementById('output');
-        try {
-            const parsed = JSON.parse(msg);
-            output.innerText += JSON.stringify(parsed, null, 2) + "\n\n";
-        } catch {
-            output.innerText += msg + "\n\n";
-        }
-    }
-
-    function clearMessages() {
-        document.getElementById('output').innerText = "Waiting for messages...";
-    }
-
-    function setStatus(text, color) {
-        const status = document.getElementById('status');
-        status.innerText = text;
-        status.style.color = color;
-    }
-
-    function showError(msg) {
-        setStatus(msg, "#dc3545");
     }
 </script>
 
