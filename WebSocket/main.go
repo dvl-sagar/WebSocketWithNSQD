@@ -214,6 +214,10 @@ func main() {
 		// Limiter: rate.NewLimiter(rate.Every(100*time.Millisecond), 10),
 	}
 	http.Handle("/ws", svr)
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
+
+	log.Println("Server started on http://localhost:8080")
 	log.Println("WebSocket server started at ws://localhost:8080/ws")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
