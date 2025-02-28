@@ -17,18 +17,17 @@ var collection *mongo.Collection
 
 type DbRequest struct {
 	Id         primitive.ObjectID `bson:"_id,omitempty" json:"_id,omitempty"`
-	TrackingId string             `bson:"trackingId" json:"trackingId"`
-	Data       any                `bson:"data" json:"data"`
-	Status     string             `bson:"status" json:"status"`
-	CreatedAt  time.Time          `bson:"createdAt" json:"createdAt"`
+	UserId     string             `json:"userId" bson:"userId"`
+	TrackingId string             `bson:"trackingId" json:"trackingId,omitempty"`
+	Data       any                `bson:"data" json:"data,omitempty"`
+	Status     string             `bson:"status" json:"status,omitempty"`
+	CreatedAt  time.Time          `bson:"createdAt" json:"createdAt,omitempty"`
 }
 
 type PendingRequest struct {
 	TrackingId string `json:"trackingId" bson:"trackingId"`
 	Data       any    `json:"status" bson:"status"`
 }
-
-
 
 func ConnectDB() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -50,22 +49,34 @@ func ConnectDB() {
 	log.Println("Connected to MongoDB")
 }
 
-func SaveRequest(trackingId string, data any) any {
-	req := DbRequest{
-		TrackingId: trackingId,
-		Data:       data,
-		Status:     "in-progress",
-		CreatedAt:  time.Now(),
+func SaveRequest(trackingIds []string, data any, userId string) {
+	for _, trackingId := range trackingIds {
+		req := DbRequest{
+			TrackingId: trackingId,
+			Data:       data,
+			UserId:     userId,
+			Status:     "in-progress",
+			CreatedAt:  time.Now(),
+		}
+		_, err := collection.InsertOne(context.TODO(), req)
+		if err != nil {
+			log.Println("Error saving request:", err)
+		}
 	}
-	result, err := collection.InsertOne(context.TODO(), req)
-	if err != nil {
-		log.Println("Error saving request:", err)
-	}
-	return result.InsertedID
 }
 
-func UpdateRequest(id primitive.ObjectID) {
-	filter := bson.M{"_id": id}
+func UpdateRequest(trackingId, userId string, data any) {
+	filter := bson.M{"trackingId": trackingId, "userId": userId}
+	update := bson.M{"$set": bson.M{"status": "fetched", "data": data}}
+
+	_, err := collection.UpdateOne(context.TODO(), filter, update)
+	if err != nil {
+		log.Println("Error saving result:", err)
+	}
+}
+
+func CompleteRequest(trackingId, userId string) {
+	filter := bson.M{"trackingId": trackingId, "userId": userId}
 	update := bson.M{"$set": bson.M{"status": "done"}}
 
 	_, err := collection.UpdateOne(context.TODO(), filter, update)
@@ -73,7 +84,8 @@ func UpdateRequest(id primitive.ObjectID) {
 		log.Println("Error saving result:", err)
 	}
 }
-func UpdateData(id primitive.ObjectID,data any) {
+
+func UpdateData(id primitive.ObjectID, data any) {
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{"data": data}}
 
@@ -83,14 +95,18 @@ func UpdateData(id primitive.ObjectID,data any) {
 	}
 }
 
-func FetchInProgressData(trackingId string)any{
-	filter := bson.M{"trackingId": trackingId,"status":"in-progress"}
-	var result map[string]interface{}
-	err:=collection.FindOne(context.Background(),filter).Decode(&result)
-	if err != nil {
-		log.Println("Error fetching result:", err)
+func FetchInProgressData(trackingIds []string, userId string) []DbRequest {
+	var results []DbRequest
+	for _, trackingId := range trackingIds {
+		filter := bson.M{"trackingId": trackingId, "status": "in-progress", "userId": userId}
+		var result DbRequest
+		err := collection.FindOne(context.Background(), filter).Decode(&result)
+		if err != nil {
+			log.Println("Error fetching result:", err)
+		}
+		results = append(results, result)
 	}
-	return result["data"]
+	return results
 }
 
 func GetResult(id string) (any, bool) {
