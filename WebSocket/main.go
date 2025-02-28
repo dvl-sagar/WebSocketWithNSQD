@@ -1,7 +1,6 @@
 package main
 
 import (
-	"WebSocket_NSQ_Producer/storage"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -85,29 +84,6 @@ func (h *RequestHandler) HandleRequest(conn *websocket.Conn, userId string) erro
 		return nil
 	}
 
-	// Fetch and send pending data
-	data := storage.FetchInProgressData(req.TrackingId, userId)
-	if len(data) > 0 {
-		for _, innerData := range data {
-			pendingData := Data{
-				TrackingId: innerData.TrackingId,
-				Data:       innerData.Data,
-			}
-			pendingDataBytes, err := json.Marshal(pendingData)
-			if err != nil {
-				return err
-			}
-			err = conn.Write(ctx, typ, pendingDataBytes)
-			if err != nil {
-				return err
-			}
-			storage.CompleteRequest(innerData.TrackingId, userId)
-		}
-	}
-
-	// Save request for tracking
-	storage.SaveRequest(req.TrackingId, nil, userId)
-
 	mu.Lock()
 	clients[conn] = userId
 	mu.Unlock()
@@ -167,15 +143,11 @@ func startNSQConsumer(conn *websocket.Conn, typ websocket.MessageType, trackingI
 		}
 
 		if slices.Contains(trackingId, data.TrackingId) {
-			storage.UpdateRequest(data.TrackingId, userId, data.Data)
-
 			// Send message to WebSocket client
 			if err := conn.Write(context.Background(), typ, message.Body); err != nil {
 				log.Println("Error sending message to WebSocket:", err)
 				return err
 			}
-
-			storage.CompleteRequest(data.TrackingId, userId)
 		}
 		return nil
 	}))
@@ -254,7 +226,6 @@ func DecodeBase64(payload string) (string, error) {
 
 // Start WebSocket server
 func main() {
-	storage.ConnectDB()
 	svr := &EchoServer{
 		Logf: log.Printf,
 		// Limiter: rate.NewLimiter(rate.Every(100*time.Millisecond), 10),
